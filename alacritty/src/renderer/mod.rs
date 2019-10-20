@@ -547,8 +547,7 @@ impl QuadRenderer {
 
         unsafe {
             gl::Enable(gl::BLEND);
-            gl::BlendFunc(gl::SRC1_COLOR, gl::ONE_MINUS_SRC1_COLOR);
-            gl::Enable(gl::MULTISAMPLE);
+            gl::BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
 
             // Disable depth mask, as the renderer never uses depth tests
             gl::DepthMask(gl::FALSE);
@@ -746,7 +745,7 @@ impl QuadRenderer {
         // Deactivate rectangle program again
         unsafe {
             // Reset blending strategy
-            gl::BlendFunc(gl::SRC1_COLOR, gl::ONE_MINUS_SRC1_COLOR);
+            gl::BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
 
             // Reset data and buffers
             gl::BindBuffer(gl::ARRAY_BUFFER, 0);
