@@ -11,13 +11,14 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-#version 330 core
+#version 100
+precision mediump float;
 
 uniform vec4 color;
 
-out vec4 FragColor;
+varying vec4 FragColor;
 
 void main()
 {
-    FragColor = color;
+    gl_FragColor = color;
 }

@@ -120,6 +120,13 @@ pub struct TextShaderProgram {
     ///
     /// Rendering is split into two passes; 1 for backgrounds, and one for text
     u_background: GLint,
+
+    a_grid_coords: GLuint,
+    a_extra: GLuint,
+    a_glyph: GLuint,
+    a_uv: GLuint,
+    a_text_color: GLuint,
+    a_background_color: GLuint,
 }
 
 /// Rectangle drawing program
@@ -131,6 +138,8 @@ pub struct RectShaderProgram {
     id: GLuint,
     /// Rectangle color
     u_color: GLint,
+
+    a_pos: GLuint,
 }
 
 #[derive(Copy, Debug, Clone)]
@@ -390,6 +399,9 @@ struct InstanceData {
     // coords
     col: f32,
     row: f32,
+    // coord offsets
+    vertex_id: f32,
+    colored: f32,
     // glyph offset
     left: f32,
     top: f32,
@@ -417,10 +429,8 @@ struct InstanceData {
 pub struct QuadRenderer {
     program: TextShaderProgram,
     rect_program: RectShaderProgram,
-    vao: GLuint,
-    ebo: GLuint,
     vbo_instance: GLuint,
-    rect_vao: GLuint,
+    rect_ebo: GLuint,
     rect_vbo: GLuint,
     atlas: Vec<Atlas>,
     current_atlas: usize,
@@ -458,42 +468,41 @@ impl Batch {
         Self { tex: 0, instances: Vec::with_capacity(BATCH_MAX) }
     }
 
-    pub fn add_item(&mut self, mut cell: RenderableCell, glyph: &Glyph) {
+    pub fn add_item(&mut self, cell: &RenderableCell, glyph: &Glyph) {
         if self.is_empty() {
             self.tex = glyph.tex_id;
         }
 
-        if glyph.colored {
-            // XXX Temporary workaround to prevent emojis being rendered with a wrong colors on, at
-            // least, dark backgrounds. For more info see #1864.
-            cell.fg.r = 255;
-            cell.fg.g = 255;
-            cell.fg.b = 255;
+        let indices: [f32; 6] = [0., 1., 3., 1., 2., 3.];
+
+        for id in &indices {
+            self.instances.push(InstanceData {
+                col: cell.column.0 as f32,
+                row: cell.line.0 as f32,
+
+                vertex_id: *id,
+                colored: if glyph.colored { 1. } else { 0. },
+
+                top: glyph.top,
+                left: glyph.left,
+                width: glyph.width,
+                height: glyph.height,
+
+                uv_bot: glyph.uv_bot,
+                uv_left: glyph.uv_left,
+                uv_width: glyph.uv_width,
+                uv_height: glyph.uv_height,
+
+                r: f32::from(cell.fg.r),
+                g: f32::from(cell.fg.g),
+                b: f32::from(cell.fg.b),
+
+                bg_r: f32::from(cell.bg.r),
+                bg_g: f32::from(cell.bg.g),
+                bg_b: f32::from(cell.bg.b),
+                bg_a: cell.bg_alpha,
+            });
         }
-
-        self.instances.push(InstanceData {
-            col: cell.column.0 as f32,
-            row: cell.line.0 as f32,
-
-            top: glyph.top,
-            left: glyph.left,
-            width: glyph.width,
-            height: glyph.height,
-
-            uv_bot: glyph.uv_bot,
-            uv_left: glyph.uv_left,
-            uv_width: glyph.uv_width,
-            uv_height: glyph.uv_height,
-
-            r: f32::from(cell.fg.r),
-            g: f32::from(cell.fg.g),
-            b: f32::from(cell.fg.b),
-
-            bg_r: f32::from(cell.bg.r),
-            bg_g: f32::from(cell.bg.g),
-            bg_b: f32::from(cell.bg.b),
-            bg_a: cell.bg_alpha,
-        });
     }
 
     #[inline]
@@ -528,7 +537,7 @@ impl Batch {
 }
 
 /// Maximum items to be drawn in a batch.
-const BATCH_MAX: usize = 0x1_0000;
+const BATCH_MAX: usize = 0x1_0000 * 6;
 const ATLAS_SIZE: i32 = 1024;
 
 impl QuadRenderer {
@@ -536,40 +545,19 @@ impl QuadRenderer {
         let program = TextShaderProgram::new()?;
         let rect_program = RectShaderProgram::new()?;
 
-        let mut vao: GLuint = 0;
-        let mut ebo: GLuint = 0;
-
         let mut vbo_instance: GLuint = 0;
 
-        let mut rect_vao: GLuint = 0;
         let mut rect_vbo: GLuint = 0;
         let mut rect_ebo: GLuint = 0;
 
         unsafe {
             gl::Enable(gl::BLEND);
-            gl::BlendFunc(gl::SRC1_COLOR, gl::ONE_MINUS_SRC1_COLOR);
-            gl::Enable(gl::MULTISAMPLE);
+            gl::BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
 
             // Disable depth mask, as the renderer never uses depth tests
             gl::DepthMask(gl::FALSE);
 
-            gl::GenVertexArrays(1, &mut vao);
-            gl::GenBuffers(1, &mut ebo);
             gl::GenBuffers(1, &mut vbo_instance);
-            gl::BindVertexArray(vao);
-
-            // ---------------------
-            // Set up element buffer
-            // ---------------------
-            let indices: [u32; 6] = [0, 1, 3, 1, 2, 3];
-
-            gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, ebo);
-            gl::BufferData(
-                gl::ELEMENT_ARRAY_BUFFER,
-                (6 * size_of::<u32>()) as isize,
-                indices.as_ptr() as *const _,
-                gl::STATIC_DRAW,
-            );
 
             // ----------------------------
             // Setup vertex instance buffer
@@ -581,67 +569,10 @@ impl QuadRenderer {
                 ptr::null(),
                 gl::STREAM_DRAW,
             );
-            // coords
-            gl::VertexAttribPointer(
-                0,
-                2,
-                gl::FLOAT,
-                gl::FALSE,
-                size_of::<InstanceData>() as i32,
-                ptr::null(),
-            );
-            gl::EnableVertexAttribArray(0);
-            gl::VertexAttribDivisor(0, 1);
-            // glyphoffset
-            gl::VertexAttribPointer(
-                1,
-                4,
-                gl::FLOAT,
-                gl::FALSE,
-                size_of::<InstanceData>() as i32,
-                (2 * size_of::<f32>()) as *const _,
-            );
-            gl::EnableVertexAttribArray(1);
-            gl::VertexAttribDivisor(1, 1);
-            // uv
-            gl::VertexAttribPointer(
-                2,
-                4,
-                gl::FLOAT,
-                gl::FALSE,
-                size_of::<InstanceData>() as i32,
-                (6 * size_of::<f32>()) as *const _,
-            );
-            gl::EnableVertexAttribArray(2);
-            gl::VertexAttribDivisor(2, 1);
-            // color
-            gl::VertexAttribPointer(
-                3,
-                3,
-                gl::FLOAT,
-                gl::FALSE,
-                size_of::<InstanceData>() as i32,
-                (10 * size_of::<f32>()) as *const _,
-            );
-            gl::EnableVertexAttribArray(3);
-            gl::VertexAttribDivisor(3, 1);
-            // color
-            gl::VertexAttribPointer(
-                4,
-                4,
-                gl::FLOAT,
-                gl::FALSE,
-                size_of::<InstanceData>() as i32,
-                (13 * size_of::<f32>()) as *const _,
-            );
-            gl::EnableVertexAttribArray(4);
-            gl::VertexAttribDivisor(4, 1);
 
             // Rectangle setup
-            gl::GenVertexArrays(1, &mut rect_vao);
             gl::GenBuffers(1, &mut rect_vbo);
             gl::GenBuffers(1, &mut rect_ebo);
-            gl::BindVertexArray(rect_vao);
             let indices: [i32; 6] = [0, 1, 3, 1, 2, 3];
             gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, rect_ebo);
             gl::BufferData(
@@ -652,7 +583,6 @@ impl QuadRenderer {
             );
 
             // Cleanup
-            gl::BindVertexArray(0);
             gl::BindBuffer(gl::ARRAY_BUFFER, 0);
             gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, 0);
         }
@@ -691,10 +621,8 @@ impl QuadRenderer {
         let mut renderer = Self {
             program,
             rect_program,
-            vao,
-            ebo,
             vbo_instance,
-            rect_vao,
+            rect_ebo,
             rect_vbo,
             atlas: Vec::new(),
             current_atlas: 0,
@@ -723,19 +651,19 @@ impl QuadRenderer {
             gl::BlendFuncSeparate(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA, gl::SRC_ALPHA, gl::ONE);
 
             // Setup data and buffers
-            gl::BindVertexArray(self.rect_vao);
             gl::BindBuffer(gl::ARRAY_BUFFER, self.rect_vbo);
+            gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, self.rect_ebo);
 
             // Position
+            gl::EnableVertexAttribArray(self.rect_program.a_pos);
             gl::VertexAttribPointer(
-                0,
+                self.rect_program.a_pos,
                 2,
                 gl::FLOAT,
                 gl::FALSE,
                 (size_of::<f32>() * 2) as _,
                 ptr::null(),
             );
-            gl::EnableVertexAttribArray(0);
         }
 
         // Draw all the rects
@@ -746,11 +674,12 @@ impl QuadRenderer {
         // Deactivate rectangle program again
         unsafe {
             // Reset blending strategy
-            gl::BlendFunc(gl::SRC1_COLOR, gl::ONE_MINUS_SRC1_COLOR);
+            gl::BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
 
             // Reset data and buffers
+            gl::DisableVertexAttribArray(self.rect_program.a_pos);
             gl::BindBuffer(gl::ARRAY_BUFFER, 0);
-            gl::BindVertexArray(0);
+            gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, 0);
 
             let padding_x = props.padding_x as i32;
             let padding_y = props.padding_y as i32;
@@ -777,9 +706,68 @@ impl QuadRenderer {
             gl::UseProgram(self.program.id);
             self.program.set_term_uniforms(props);
 
-            gl::BindVertexArray(self.vao);
-            gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, self.ebo);
             gl::BindBuffer(gl::ARRAY_BUFFER, self.vbo_instance);
+            // coords
+            gl::EnableVertexAttribArray(self.program.a_grid_coords);
+            gl::VertexAttribPointer(
+                self.program.a_grid_coords,
+                2,
+                gl::FLOAT,
+                gl::FALSE,
+                size_of::<InstanceData>() as i32,
+                ptr::null(),
+            );
+            // position
+            gl::EnableVertexAttribArray(self.program.a_extra);
+            gl::VertexAttribPointer(
+                self.program.a_extra,
+                2,
+                gl::FLOAT,
+                gl::FALSE,
+                size_of::<InstanceData>() as i32,
+                (2 * size_of::<f32>()) as *const _,
+            );
+            // glyphoffset
+            gl::EnableVertexAttribArray(self.program.a_glyph);
+            gl::VertexAttribPointer(
+                self.program.a_glyph,
+                4,
+                gl::FLOAT,
+                gl::FALSE,
+                size_of::<InstanceData>() as i32,
+                (4 * size_of::<f32>()) as *const _,
+            );
+            // uv
+            gl::EnableVertexAttribArray(self.program.a_uv);
+            gl::VertexAttribPointer(
+                self.program.a_uv,
+                4,
+                gl::FLOAT,
+                gl::FALSE,
+                size_of::<InstanceData>() as i32,
+                (8 * size_of::<f32>()) as *const _,
+            );
+            // color
+            gl::EnableVertexAttribArray(self.program.a_text_color);
+            gl::VertexAttribPointer(
+                self.program.a_text_color,
+                3,
+                gl::FLOAT,
+                gl::FALSE,
+                size_of::<InstanceData>() as i32,
+                (12 * size_of::<f32>()) as *const _,
+            );
+            // color
+            gl::EnableVertexAttribArray(self.program.a_background_color);
+            gl::VertexAttribPointer(
+                self.program.a_background_color,
+                4,
+                gl::FLOAT,
+                gl::FALSE,
+                size_of::<InstanceData>() as i32,
+                (15 * size_of::<f32>()) as *const _,
+            );
+
             gl::ActiveTexture(gl::TEXTURE0);
         }
 
@@ -793,9 +781,13 @@ impl QuadRenderer {
         });
 
         unsafe {
-            gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, 0);
+            gl::DisableVertexAttribArray(self.program.a_grid_coords);
+            gl::DisableVertexAttribArray(self.program.a_extra);
+            gl::DisableVertexAttribArray(self.program.a_glyph);
+            gl::DisableVertexAttribArray(self.program.a_uv);
+            gl::DisableVertexAttribArray(self.program.a_text_color);
+            gl::DisableVertexAttribArray(self.program.a_background_color);
             gl::BindBuffer(gl::ARRAY_BUFFER, 0);
-            gl::BindVertexArray(0);
 
             gl::UseProgram(0);
         }
@@ -937,20 +929,16 @@ impl<'a, C> RenderApi<'a, C> {
 
         unsafe {
             self.program.set_background_pass(true);
-            gl::DrawElementsInstanced(
+            gl::DrawArrays(
                 gl::TRIANGLES,
-                6,
-                gl::UNSIGNED_INT,
-                ptr::null(),
-                self.batch.len() as GLsizei,
+                0,
+                self.batch.len() as GLsizei
             );
             self.program.set_background_pass(false);
-            gl::DrawElementsInstanced(
+            gl::DrawArrays(
                 gl::TRIANGLES,
-                6,
-                gl::UNSIGNED_INT,
-                ptr::null(),
-                self.batch.len() as GLsizei,
+                0,
+                self.batch.len() as GLsizei
             );
         }
 
@@ -988,12 +976,12 @@ impl<'a, C> RenderApi<'a, C> {
             .collect::<Vec<_>>();
 
         for cell in cells {
-            self.render_cell(cell, glyph_cache);
+            self.render_cell(&cell, glyph_cache);
         }
     }
 
     #[inline]
-    fn add_render_item(&mut self, cell: RenderableCell, glyph: &Glyph) {
+    fn add_render_item(&mut self, cell: &RenderableCell, glyph: &Glyph) {
         // Flush batch if tex changing
         if !self.batch.is_empty() && self.batch.tex != glyph.tex_id {
             self.render_batch();
@@ -1007,7 +995,7 @@ impl<'a, C> RenderApi<'a, C> {
         }
     }
 
-    pub fn render_cell(&mut self, cell: RenderableCell, glyph_cache: &mut GlyphCache) {
+    pub fn render_cell(&mut self, cell: &RenderableCell, glyph_cache: &mut GlyphCache) {
         let chars = match cell.inner {
             RenderableCellContent::Cursor(cursor_key) => {
                 // Raw cell pixel buffers like cursors don't need to go through font lookup
@@ -1188,11 +1176,31 @@ impl TextShaderProgram {
 
         assert_uniform_valid!(projection, cell_dim, background);
 
+        // get attribute locations
+        let (grid_coords, extra, glyph, uv, text_color, background_color) = unsafe {
+            (
+                gl::GetAttribLocation(program, cptr!(b"gridCoords\0")),
+                gl::GetAttribLocation(program, cptr!(b"extra\0")),
+                gl::GetAttribLocation(program, cptr!(b"glyph\0")),
+                gl::GetAttribLocation(program, cptr!(b"uv\0")),
+                gl::GetAttribLocation(program, cptr!(b"textColor\0")),
+                gl::GetAttribLocation(program, cptr!(b"backgroundColor\0")),
+            )
+        };
+
+        assert_uniform_valid!(grid_coords, extra, glyph, uv, text_color, background_color);
+
         let shader = Self {
             id: program,
             u_projection: projection,
             u_cell_dim: cell_dim,
             u_background: background,
+            a_grid_coords: grid_coords as u32,
+            a_extra: extra as u32,
+            a_glyph: glyph as u32,
+            a_uv: uv as u32,
+            a_text_color: text_color as u32,
+            a_background_color: background_color as u32,
         };
 
         unsafe {
@@ -1266,7 +1274,9 @@ impl RectShaderProgram {
         // get uniform locations
         let u_color = unsafe { gl::GetUniformLocation(program, b"color\0".as_ptr() as *const _) };
 
-        let shader = Self { id: program, u_color };
+        let a_pos = unsafe { gl::GetAttribLocation(program, b"aPos\0".as_ptr() as *const _) };
+
+        let shader = Self { id: program, u_color, a_pos: a_pos as u32 };
 
         unsafe { gl::UseProgram(0) }
 

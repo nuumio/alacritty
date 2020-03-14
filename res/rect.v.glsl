@@ -11,8 +11,10 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-#version 330 core
-layout (location = 0) in vec2 aPos;
+#version 100
+precision mediump float;
+
+attribute vec2 aPos;
 
 void main()
 {
