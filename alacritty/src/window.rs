@@ -110,6 +110,7 @@ fn create_gl_window(
     }
 
     let windowed_context = ContextBuilder::new()
+        .with_gl(glutin::GlRequest::Specific(glutin::Api::OpenGlEs, (2, 0)))
         .with_srgb(srgb)
         .with_vsync(true)
         .with_hardware_acceleration(None)

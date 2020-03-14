@@ -11,25 +11,31 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-#version 330 core
+#version 100
+precision mediump float;
+precision lowp int;
 // Cell properties
-layout (location = 0) in vec2 gridCoords;
+attribute vec2 gridCoords;
+
+// vertex properties
+attribute vec2 extra;
 
 // glyph properties
-layout (location = 1) in vec4 glyph;
+attribute vec4 glyph;
 
 // uv mapping
-layout (location = 2) in vec4 uv;
+attribute vec4 uv;
 
 // text fg color
-layout (location = 3) in vec3 textColor;
+attribute vec3 textColor;
 
 // Background color
-layout (location = 4) in vec4 backgroundColor;
+attribute vec4 backgroundColor;
 
-out vec2 TexCoords;
-flat out vec3 fg;
-flat out vec4 bg;
+varying float colored;
+varying vec2 TexCoords;
+varying vec3 fg;
+varying vec4 bg;
 
 // Terminal properties
 uniform vec2 cellDim;
@@ -45,8 +51,9 @@ void main()
 
     // Compute vertex corner position
     vec2 position;
-    position.x = (gl_VertexID == 0 || gl_VertexID == 1) ? 1. : 0.;
-    position.y = (gl_VertexID == 0 || gl_VertexID == 3) ? 0. : 1.;
+    position.x = (extra.x == 0. || extra.x == 1.) ? 1. : 0.;
+    position.y = (extra.x == 0. || extra.x == 3.) ? 0. : 1.;
+    colored = extra.y;
 
     // Position of cell from top-left
     vec2 cellPosition = cellDim * gridCoords;
